@@ -1300,7 +1300,7 @@ void showMenu1Screen()
   
   u8g2.drawStr( 150,130,dateBuffer);
   
-  u8g2.drawStr( 110,160," Solapur Main Road !!!!");
+  u8g2.drawStr( 110,160," KPIT Technologies Pune");
   
   u8g2.setDrawColor(0);
 
