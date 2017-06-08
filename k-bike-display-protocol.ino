@@ -74,6 +74,7 @@ The following instructions describe the steps to be made on the Windows PC:
 #include "cp_if.h"
 
 #include "iconsf.h"
+#include "nav_icons169by194px.h"
 //#include "icons_navigation.h"
 //#include "iconsmap.h"
 #include "onboardscreen.h"
@@ -165,6 +166,10 @@ const byte year = 17;
 char timeBuffer[9];
 char dateBuffer[11];
 
+//DM Battery Mappping
+#define TEST_POINTS 7
+static float aSlope[TEST_POINTS]={83.33,100,166.67,333.33,333.33,400,333.33};
+static float aLineConstant[TEST_POINTS]={-166.66,-201,-341.67,-703.32,-703.32,-856,-700};
 
 
 char CurrNavDistanceStr[10];
@@ -178,6 +183,8 @@ bool toggleSecond=0;
 bool newBleString=false;
 
 byte DM_batterySOC=100;
+uint16_t DMbatbufferraw[5];
+uint8_t bufptr=0;
 
 //uint8_t bleRcvS = NULL0];
 uint8_t *bleRcvStr;
@@ -191,7 +198,7 @@ bool disconnectEvent=0;
 bool bleconnect=false;
 
 
-int sensorValue=0;
+int DMBatSensorVoltage=0;
 float voltage=0;
 
 unsigned char ScreenMenu=0,ScreenMenuOld=1;
@@ -201,6 +208,8 @@ unsigned long oldcharrxtime=0,lastBLErxtime=0;
     //screen blinking control
     unsigned long blinkPrevMillis=0;
     unsigned char blinkcontrol=0;
+
+unsigned long lasticonsreceived=0;    
     
 
 
@@ -304,6 +313,18 @@ void error(const __FlashStringHelper*err) {
   while (1);
 }
 
+//#ifdef __cplusplus
+//extern "C" {
+//#endif
+//
+////void(* resetFunc) (void);
+////unsigned *fp=(void *) 0x00004000;
+////resetFunc = (void *) *fp;
+////void(* resetFunc) (void) = setup; //0;//declare reset function at address 0
+//
+//#ifdef __cplusplus
+//}
+//#endif
 //Global variable use by checkbuttonPressPattern functions
 unsigned long buttonPrevMillis=0;
 unsigned int buttonONtime=0;
@@ -542,7 +563,7 @@ void processMessage(unsigned int len) {
   communication_protocol_receive_payload(session, len);  
 
  // Clear the old message to be ready for the new one
-  for (int i=0; i<MAX(session->imtu, session->omtu); i++) 
+  for (int i=0; i<len; i++) 
   {
     //bleMessage[i] = ' ';
     uart_buffer[i] = ' ';
@@ -557,8 +578,9 @@ void processMessage(unsigned int len) {
 void connectedd(void)
 {
   Serial.println( F("Connected") );
-    if(ScreenMenu==1)
-        ScreenMenu=MAINMENUSCREEN1;
+    //if(ScreenMenu==1)
+        ScreenMenu=1;//MAINMENUSCREEN1;
+    Serial.println("From Connect ISR :ScreenMenu=1");    
     bleconnect=true;
     lastBLErxtime=millis();
 }
@@ -569,8 +591,9 @@ void disconnected(void)
   {
     Serial.println( F("Disconnected") );
       bleconnect=false;
-      if(ScreenMenu!=1)
+      //if(ScreenMenu!=1)
         ScreenMenu=0;
+        Serial.println("From Disconnect ISR :ScreenMenu=0");
   }
 }
 
@@ -599,17 +622,24 @@ void BleUartRX(char * data, uint16_t len)
       
           Serial.println("Handle more than 20 byte of payload receive");
           processMessage(20); // call process message 
+          //clear process data
+
+          
           if((uart_buffer_len-20) <= 20)
-          {
+          {   
+              Serial.print("remain continue byte left=");
+              Serial.print(uart_buffer_len-20,DEC);
               for (j = 20; j < uart_buffer_len; j++)
               {
                   Serial.print("[0x");
                   if (data[j] <= 0xF) Serial.print(F("0"));
-                  Serial.print(data[j],HEX);
+                  Serial.print(*((session->inbuf)+j),HEX);
                   Serial.print("]");
-                  *((session->inbuf)+(j-20))=data[j];//store copy to session structure
-                  stringComplete=2;
-              }            
+                  *((session->inbuf)+(j-20))=*((session->inbuf)+j);//store copy to session structure
+                  
+              }   
+              processMessage(uart_buffer_len-20);
+                       
           }
           else
           {
@@ -629,19 +659,10 @@ void setup(void)
 {
   delay(1000);
   Serial.begin(115200);
-  //Wait until the serial port is available (useful only for the Leonardo)
-  //As the Leonardo board is not reseted every time you open the Serial Monitor
-//  #if defined (__AVR_ATmega32U4__)
-//    while(!Serial)
-//    {}
-//    delay(5000);  //5 seconds delay for enabling to see the start up comments on the serial board
-//  #elif defined(__PIC32MX__)
-//    delay(1000);
-//  #endif
-
-
   //while (!Serial);
   delay(500);
+
+  Serial.println("######## MKRZero MCU STARTING *********###########");
 
   rtc.begin(); // initialize RTC
 
@@ -659,6 +680,32 @@ void setup(void)
   pinMode(BUTTON_KEY, INPUT_PULLUP);
   Serial.println("Starting the CPU...............");
 
+//  ///Wait for Button short Press to start the CPU
+//    while(1)
+//    {
+//       checkbuttonPressPattern(); //USER Switch checks...... every 10 msec
+////       ButtonTapPressDetect=false;
+////       ButtonShortPressDetect=false;
+//       ButtonLongPressDetect=false;
+//       ButtonUltraLongPressDetect=false;
+//       if(ButtonTapPressDetect ||ButtonShortPressDetect )
+//       {
+//          ButtonTapPressDetect=false;
+//          ButtonShortPressDetect=false;
+//          ScreenMenu=0;
+//          ScreenMenuOld=1;
+//          Serial.println("****** Wakeup from sleep *********");
+//         
+////          while(digitalRead(BUTTON_KEY)==LOW );//LOW means press button, wait till release
+//          buttonONtime=0;
+//
+//          
+//          //delay(500);
+//          break;
+//       }
+//    }
+
+
   // setup SD-card
 //  Serial.print("Initializing SD card...");
 //  if (!SD.begin(4)) {
@@ -669,45 +716,13 @@ void setup(void)
   
 
 
-
-
-  //Serial.println(F("Arduino setup"));
-  //Serial.println(F("Set line ending to newline to send data from the serial monitor"));
-
-  
+ 
   u8g2.begin();
   u8g2.clearBuffer();          // clear the internal memory
-//  u8g2.drawBox(0,0,400,240);
-//  u8g2.sendBuffer();
-//  u8g2.clearBuffer();
-//  u8g2.sendBuffer();
-//
-////  u8g2.setFont(u8g2_font_karla_22_tf); // choose a suitable font
-////  u8g2.setDrawColor(2);  
-//  u8g2.setFont(u8g2_font_karla_22_tf);
-//  u8g2.setColorIndex(1);
-//  
-//  u8g2.drawStr(110,120,"WELCOME LETS RIDE !!");  // write something to the internal memory
-//  u8g2.sendBuffer();
-//  u8g2.clearBuffer();
-//  u8g2.sendBuffer();
-
- 
-//KPIT serial protocol
 
 //  session = communication_protocol_new(IMTU_OVERBLEUART, OMTU_OVERBLEUART, NULL, NULL, NULL);
   session = communication_protocol_new(IMTU_OVERBLEUART, OMTU_OVERBLEUART, &ind_callback, &cfm_callback, &transport_callback);
       
-//  //Set the Device Name
-//  memset(device_name, 0x00, 8);
-//  setDeviceName("KBIKE");
-//
-////  u8g2.setFont(u8g2_font_karla_22_tf);
-////  u8g2.setColorIndex(1);
-////  u8g2.setFontRefHeightExtendedText();
-////  //u8g2.setDefaultForegroundColor();
-////  u8g2.setFontPosTop();
-
 
   stringComplete = 0;
 
@@ -716,70 +731,109 @@ void setup(void)
     u8g2.setDrawColor(0);
     
   delay(200);  
-
+  
+  u8g2.clearBuffer(); //WelcomeScreen_bits
+  u8g2.drawXBM(0, 0, 399, 239, screen1_bits);//testpenguin_bits apple_bits directionLogo1_bits
+  u8g2.sendBuffer(); 
  
-  ScreenMenu=0,ScreenMenuOld=1;
-  nav_icon_id=0,oldnav_icon_id=1;
+
+
+
+
+  while(bleInitialize()==FALSE)
+  {
+    Serial.println("Retry BLE initialization....");
+    delay(500);
+  }
+
+  Serial.println("Going to Enter Loop from Setup");
+  ScreenMenu=0;
+  Serial.println("from setup() ScreenMenu=0");
+  ScreenMenuOld=1;
+  nav_icon_id=0;
+  oldnav_icon_id=0;
   newBleString=false;
-
-
-
-  bleInitialize();
-
-
-
   
 }
 
-void bleInitialize(void)
+bool bleInitialize(void)
 {
+  bool ret=TRUE;
 //Enable BLE advistise mode
   if ( !ble.begin(VERBOSE_MODE) )
   {
     error(F("Couldn't find Bluefruit, make sure it's in CoMmanD mode & check wiring?"));
+    ret=FALSE;
   }
+  delay(50);
   if ( FACTORYRESET_ENABLE )
   {
     /* Perform a factory reset to make sure everything is in a known state */
     Serial.println(F("Performing a factory reset: "));
     if ( ! ble.factoryReset() ){
       error(F("Couldn't factory reset"));
+      ret=FALSE;
     }
   }
-
-  if (! ble.sendCommandCheckOK(F("AT+GAPDEVNAME=KBikeBLE_DMRed")) ) {
+   delay(300);
+  if (! ble.sendCommandCheckOK(F("AT+GAPDEVNAME=KBikeBLE_DMNitant")) ) {
     error(F("Could not set device name?"));
+    ret=FALSE;
   }
-  
+  delay(50);
   /* Disable command echo from Bluefruit */
   ble.echo(false);
+  delay(50);
   // check response status
     /* Print Bluefruit information */
   ble.info();
-
+  delay(100);  
   // LED Activity command is only supported from 0.6.6
-  if ( ble.isVersionAtLeast(MINIMUM_FIRMWARE_VERSION) )
-  {
-    // Change Mode LED Activity
-    Serial.println(F("Change LED activity to " MODE_LED_BEHAVIOUR));
-    ble.sendCommandCheckOK("AT+HWModeLED=" MODE_LED_BEHAVIOUR);
-  }
+//  if ( ble.isVersionAtLeast(MINIMUM_FIRMWARE_VERSION) )
+//  {
+//    // Change Mode LED Activity
+//    delay(50);
+//    Serial.println(F("Change LED activity to " MODE_LED_BEHAVIOUR));
+//    ble.sendCommandCheckOK("AT+HWModeLED=" MODE_LED_BEHAVIOUR);
+//  }
     /* Wait for connection */
   
   Serial.println(F("******************************"));
   /* Set callbacks */
-  ble.setConnectCallback(connectedd);
-  ble.setDisconnectCallback(disconnected);
-  ble.setBleUartRxCallback(BleUartRX);
-
+  int retrycmd=0;
+  //delay(100);
+  retrycmd=0;
+  while(ble.setConnectCallback(connectedd)==false)
+  {
+    if(retrycmd++>10)
+      break;
+  }
+  delay(1);
+  retrycmd=0;
+  while(ble.setDisconnectCallback(disconnected)==false)
+  {
+    if(retrycmd++>10)
+      break;
+  }
+  delay(1);
+  
+  retrycmd=0;
+  while(ble.setBleUartRxCallback(BleUartRX)==false)
+  {
+    if(retrycmd++>30)
+      break;
+  }
+  delay(1);
   
 
   Serial.println(F("******************************"));
 
-    ble.verbose(false);  // debug info is a little annoying after this point!
+  ble.verbose(false);  // debug info is a little annoying after this point!
   // Set module to DATA mode
 //  Serial.println( F("Switching to DATA mode!") );
- // ble.setMode(BLUEFRUIT_MODE_DATA);
+ // ble.setMode(BLUEFRUIT_MODE_DATA);\
+  delay(10);
+  return ret;
 }
 
 //
@@ -789,8 +843,9 @@ void bleInitialize(void)
 
 
 void loop() {
+  //Serial.println("Loop Executing ....");
  // ble.setMode(BLUEFRUIT_MODE_COMMAND);
-  ble.update(150);//get status of BLE connection status, it call disconnect and connected callback inside.
+  ble.update(100);//get status of BLE connection status, it call disconnect and connected callback inside.
   //ble.setMode(BLUEFRUIT_MODE_DATA);
   
   checkbuttonPressPattern(); //USER Switch checks...... every 10 msec
@@ -800,14 +855,14 @@ void loop() {
      Serial.println("******TAP detected**********");
 //     bleModeAdafuitApps^=true;//toggle
      ButtonTapPressDetect=false;
-     ScreenMenu++;
+    // ScreenMenu++;
 
   }
   else if(ButtonShortPressDetect)
   { 
     Serial.println("******Short Press detected**********");
     ButtonShortPressDetect=false;
-    ScreenMenu++;
+    //ScreenMenu++;
 
   }
   else if(ButtonLongPressDetect)
@@ -817,91 +872,51 @@ void loop() {
 
   }
   else if(ButtonUltraLongPressDetect)
-  { Serial.println("****** Ultra Long Press detected**********");
+  { 
+    
+    Serial.println("****** Ultra Long Press detected**********");
     ButtonUltraLongPressDetect=false;
     
-    u8g2.clearBuffer();
-    u8g2.setDrawColor(1);
-    u8g2.setFont(u8g2_font_karla_45_tf);
-    u8g2.drawStr( 70,120,"bye bye ...");//u8g2_font_osb41_tn
-    u8g2.setDrawColor(0);
-    u8g2.sendBuffer();
-    delay(2000);
-    Serial.println("****** Going to sleep *********");
-
-    
-    u8g2.clearBuffer();
-    u8g2.sendBuffer();
-    while(digitalRead(BUTTON_KEY)==LOW );//LOW means press button, wait till release
-    buttonONtime=0;
-    ButtonTapPressDetect=false;
-    ButtonShortPressDetect=false;
-    ButtonLongPressDetect=false;
-    ButtonUltraLongPressDetect=false;
-    buttonONtime=0;
-    while(1)
-    {
-       checkbuttonPressPattern(); //USER Switch checks...... every 10 msec
-//       ButtonTapPressDetect=false;
-//       ButtonShortPressDetect=false;
-       ButtonLongPressDetect=false;
-       ButtonUltraLongPressDetect=false;
-       if(ButtonTapPressDetect ||ButtonShortPressDetect )
-       {
-          ButtonTapPressDetect=false;
-          ButtonShortPressDetect=false;
-          ScreenMenu=0;
-          ScreenMenuOld=1;
-          Serial.println("****** Wakeup from sleep *********");
-          u8g2.clearBuffer(); //WelcomeScreen_bits
-          u8g2.drawXBM(0, 0, 399, 239, screen1_bits);//testpenguin_bits apple_bits directionLogo1_bits
-          u8g2.sendBuffer();          
-          while(digitalRead(BUTTON_KEY)==LOW );//LOW means press button, wait till release
-          buttonONtime=0;
-          ble.flush();
-          
-          
-          break;
-       }
-    }
+//    u8g2.clearBuffer();
+//    u8g2.setDrawColor(1);
+//    u8g2.setFont(u8g2_font_karla_60_tf);
+//    u8g2.drawStr( 40,80,"Sleeping !!");//u8g2_font_osb41_tn
+//    u8g2.setFont(u8g2_font_karla_22B_tf);
+//    u8g2.drawStr( 20,180,"SHORT PRESS BUTTON TO WAKE");
+//    u8g2.setDrawColor(0);
+//    u8g2.sendBuffer();
+//    delay(2000);
+//    Serial.println("****** Going to sleep *********");
+//
+//    ble.disconnect();
+//    BLUEFRUIT_HWSERIAL_NAME.println("AT+GAPSTOPADV");
+//
+//    
+//    u8g2.clearBuffer();
+//    u8g2.sendBuffer();
+//    while(digitalRead(BUTTON_KEY)==LOW );//LOW means press button, wait till release
+//    buttonONtime=0;
+//    ButtonTapPressDetect=false;
+//    ButtonShortPressDetect=false;
+//    ButtonLongPressDetect=false;
+//    ButtonUltraLongPressDetect=false;
+//    buttonONtime=0;
+//    
+//   //RESET THE CPU HERE
+//   //resetFunc(); //call reset 
+//   NVIC_SystemReset();      // processor software reset
+//
+//
+//   Serial.println("Reset not WORKING !!!!!!!");
 
   }
 
 
 
-//  if(bleModeAdafuitApps)
-//  {  
-//    serialBleRxStrDisplay();//display directly what comes on display
-//  }
-//  else
-//  {
-//    serialBleRxControl();//buffer ble data
-//  }
-
-   // serialBleRxcapture();
 
 
-    if (stringComplete==2)//byte stream of data has been recieve from phone
+    if(stringComplete==2)//byte stream of data has been recieve from phone
     {
-      //Serial.println(F("Rx on BLE Uart : "));
-      //Serial.print("RX data: ");
-  
-      
-
-      //if(uart_buffer_len>20)
-      
-//      // copy clear the uart_buffer:
-//      for (int j = 0; j < uart_buffer_len; j++)
-//      {
-//          Serial.print("[0x");
-//          if (uart_buffer[j] <= 0xF) Serial.print(F("0"));
-//          Serial.print(uart_buffer[j],HEX);
-//          Serial.print("]");
-//          *((session->inbuf)+j)=uart_buffer[j];//store copy to session structure
-//          uart_buffer[j] = ' ';
-//          
-//      }
-//      Serial.println(" ");
       stringIndex    = 0;
       stringComplete = 0;//reset rx and rearm for packet to receive    
   
@@ -920,253 +935,89 @@ void loop() {
                                   u8g2.setDrawColor(0);
                                   u8g2.drawXBM(0, 0, 399, 239, screen1_bits);//testpenguin_bits apple_bits directionLogo1_bits
                                    
-//                                  sensorValue = analogRead(ADC_BATTERY);
-//                                  // Convert the analog reading (which goes from 0 - 1023) to a voltage (0 - 4.3V):
-//                                  voltage = sensorValue * (4.3 / 1023.0);
-//                                  // print out the value you read:
-//                                  Serial.print("DM Battery Voltage = ");
-//                                  Serial.print(voltage);
-//                                  Serial.println("V");
-//                                
-//                                  u8g2.setFontPosTop();
-//                                  //u8g2.setDrawColor(0);
-//                                
-//                                  u8g2.clearBuffer(); //main menu start
-//                                  sprintf (dateBuffer, "DM Battery : %.2f V", voltage);
-//                                  u8g2.setFont(u8g2_font_karla_35_tf);
-//                                  //sprintf (timeBuffer, ":%.2d",rtc.getSeconds());
-//                                  u8g2.drawStr( 30,50,dateBuffer);   
-//
-//                                  if(voltage >= 3.8)    
-//                                    DM_batterySOC=100;
-//                                  else if(voltage < 3.45)
-//                                    DM_batterySOC=0;
-//                                  else
-//                                    DM_batterySOC=((voltage-3.45)/(3.8-3.45))*100;
-//                                  
-//                                  sprintf (dateBuffer, "DM SOC : %d ", DM_batterySOC);
-//                                  u8g2.drawStr( 30,180,dateBuffer);  
-                                                                   
+                                                                  
                                   u8g2.sendBuffer();
-                                  delay(3000);
-                                  
-                                  ScreenMenu++;
                                   break;
-
             case 1:      
-//                                  u8g2.clearBuffer(); 
-//                                  u8g2.setDrawColor(0);
-//                                  u8g2.drawXBM(0, 0,  399, 239, screen2_bits);//testpenguin_bits apple_bits directionLogo1_bits
-//                                  u8g2.setDrawColor(1);
-//                                  u8g2.sendBuffer();
                                   showLetRideScreen();
-                                  //delay(1000);
-                                  
-                                  //ScreenMenu++;
+
                                   break;                
-//            case 2:             //Clock screen Menu
-//                                  showClockScreen();
-//                                  delay(1000);
-//                                  
-//                                  ScreenMenu++;
-//                                  break;
-//            case 3:             //Show welcome
-//                                  showWelcomeScreen();
-//                                  delay(1000);
-//                                  
-//                                  ScreenMenu++;
-//                                  ScreenMenu++;
-//                                  break;
-//
-//            
-//            case 4:               u8g2.clearBuffer(); //main menu start
-//                                  u8g2.setDrawColor(1);
-//                                  //u8g2.drawXBM(200-48, 120-40, 80, 80, callrec80x80_bits);
-//                                  u8g2.drawXBM(200-(70/2), 120-(70/2), 70, 70, calling70x70_bits);
-//                                  //calling70x70_bits
-//                                  u8g2.setDrawColor(0);
-//                                  u8g2.sendBuffer();
-//                                  delay(1000);
-//                                  
-//                                  ScreenMenu=MAINMENUSCREEN1;
-//                                  break;
-            case MAINMENUSCREEN1:             //Show welcome
-                                  showMenu1Screen();
-                                  break;                                                                  
-            case MAINMENUSCREEN2:             //Show welcome
-                                  showMenu2Screen();
-                                  break; 
-            case MAINMENUSCREEN3:             //Show welcome
-                                  showMenu3Screen();
-                                  break;  
-            case MAINMENUSCREEN4:             //Show welcome
-                                  showMenu4Screen();
-                                  break;    
-            case MAINMENUSCREENNAVIGATE:      //Show welcome
+
+            case MAINMENUSCREENNAVIGATE:      //Navigation Screen
 
                                   navigationScreen();
                                   newBleString=false;
                                   oldnav_icon_id=nav_icon_id;// reset                                 
                                   break;                                      
                                                                                                      
-            default:              break;                       
+            default:              Serial.println("ERROR: false screen menu detected!!!");
+                                  break;                       
           }
     }
     
 
 
 
-    if(ScreenMenu==(MAINMENUSCREENNAVIGATE+1))
-    {
-      ScreenMenu=MAINMENUSCREEN1;  
-    }
-    //screen blinking control
-//    if(ScreenMenu==MAINMENUSCREEN1)
-//    {
-//
-//          if(((millis()- blinkPrevMillis) > 1000) && blinkcontrol==0)//check button Every 25msec
-//          {
-//              u8g2.clearBuffer();
-//              u8g2.sendBuffer();
-//              blinkcontrol=1;
-//          }
-//          else if(((millis()- blinkPrevMillis) > 500) && blinkcontrol==1)//check button Every 25msec
-//          {
-//        
-//            ScreenMenuOld^=0x01; //flip so that screen update with current menu screen
-//             blinkcontrol=0;
-//            blinkPrevMillis=millis();
-//          }   
-//                 
-//    }
 
     if( (rtc.getSeconds()!= oldgetSeconds))//update second display
-    {
-        if(ScreenMenu==MAINMENUSCREEN1 || ScreenMenu==MAINMENUSCREEN2)
-        {   
-//            u8g2.setDrawColor(0);
-//            
-//            u8g2.setFontPosTop();
-//            u8g2.drawBox(110,10,290,100);
-//            u8g2.setDrawColor(1);
-//            if(toggleSecond){
-//              sprintf (timeBuffer, "%.2d:%.2d", rtc.getHours(), rtc.getMinutes());
-//              //Serial.println("toggle 1");
-//            }
-//            else{
-//              sprintf (timeBuffer, "%.2d.%.2d", rtc.getHours(), rtc.getMinutes());  
-//              //Serial.println("toggle 0");
-//            }
-//            toggleSecond^=1;
-//            sprintf (dateBuffer, "%.2d-%.2d-%.4d", rtc.getDay(), rtc.getMonth(), 2000 + rtc.getYear());
-//
-//            u8g2.setFont(u8g2_font_karla_90_tf);
-//            //sprintf (timeBuffer, ":%.2d",rtc.getSeconds());
-//            //u8g2.setCursor(110, 40);
-//            u8g2.drawStr( 140,104-u8g2.getAscent(),timeBuffer);  
-//            u8g2.setFont(u8g2_font_karla_22_tf);
-//  
-//            u8g2.drawStr( 150,130,dateBuffer);
-//            u8g2.setDrawColor(0);   
-//            u8g2.sendBuffer();
-           ScreenMenuOld=0; 
+    {   
+
+        //Average DM battery raw values
+        DMbatbufferraw[bufptr++] = analogRead(ADC_BATTERY);
+        if(bufptr>=5)
+          bufptr=0;
+        DMBatSensorVoltage=(DMbatbufferraw[0]+DMbatbufferraw[1]+DMbatbufferraw[2]+DMbatbufferraw[3]+DMbatbufferraw[4])/5;
+
+        
+        if(ScreenMenu==1 )// DO this to update DM battery
+        { 
+          ScreenMenuOld=0; 
         }
-//        if(ScreenMenu==2)//update second display
-//        {
-//            // Print date...
-//            sprintf (dateBuffer, "%.2d.%.2d.%.4d", rtc.getDay(), rtc.getMonth(), 2000 + rtc.getYear());
-//            // ...and time
-//            sprintf (timeBuffer, "%.2d:%.2d", rtc.getHours(), rtc.getMinutes());
-//            u8g2.clearBuffer();
-//            u8g2.setDrawColor(1);
-//            u8g2.setFontPosTop();
-//            u8g2.setFont(u8g2_font_karla_90_tf);  // choose a suitable font
-//            u8g2_uint_t width = u8g2.getStrWidth(timeBuffer);
-//            u8g2.drawStr(180 - width/2, 60, timeBuffer);  // write something to the internal memory
-//            //u8g2.setFont(u8g2_font_karla_22_tf);
-//            u8g2.setFont(u8g2_font_karla_90_tf);//u8g2_font_inb21_mf
-//            sprintf (timeBuffer, ":%.2d",rtc.getSeconds());
-//            u8g2.drawStr( (350 - (u8g2.getStrWidth(timeBuffer))/2),60,timeBuffer);
-//            u8g2.setFont(u8g2_font_karla_45_tf);
-//            width = u8g2.getStrWidth(dateBuffer);
-//            u8g2.drawStr(200 - width/2, 160, dateBuffer);
-//            u8g2.sendBuffer();  
-//            u8g2.setDrawColor(0);     
-//            
-//        }
+
         
         oldgetSeconds=rtc.getSeconds();  
         
     }    
 
     //update navigation screen
-    if((ScreenMenu==MAINMENUSCREENNAVIGATE)&&((nav_icon_id != oldnav_icon_id) ||(newBleString)))
+    if((ScreenMenu==MAINMENUSCREENNAVIGATE))
     {
- 
-      navigationScreen();
-      oldnav_icon_id=nav_icon_id;
-      newBleString=false;
+        if(((nav_icon_id != oldnav_icon_id) ||(newBleString)) )//|| ((millis() - lasticonsreceived) > 20000) )
+        {
+
+          navigationScreen();
+          oldnav_icon_id=nav_icon_id;
+          newBleString=false;
+
+        }
+
     }
 
-//    if(bleconnect==false)
-//    {
-//      
-//      u8g2.setDrawColor(1);
-//      u8g2.drawXBM(400-35, 0, 35, 35, notlive_bits);
-//      u8g2.setDrawColor(0);
-//      u8g2.sendBuffer();      
-//    }
-//    else//drawBox(u8g2_uint_t x, u8g2_uint_t y, u8g2_uint_t w, u8g2_uint_t h)
-//    {
-//      u8g2.setDrawColor(0);
-//      u8g2.drawBox(400-35, 0, 35, 35);
-//      u8g2.setDrawColor(0);
-//      u8g2.sendBuffer();      
-//    }
 
-//  ble.setMode(BLUEFRUIT_MODE_COMMAND);
-  if(ble.isConnected())
-  {
-    if(bleconnect == false && (millis() - lastBLErxtime >2000) )
-    {
-        if(ScreenMenu==1)
-            ScreenMenu=MAINMENUSCREEN1;
-        bleconnect=true;
-        Serial.println("BLE connected");
-    }
-  }
-  else
-  {
-    if(bleconnect == true && (millis() - lastBLErxtime >2000))
-    {
-        bleconnect=false;
-        Serial.println("BLE disconnected");
-        if(ScreenMenu!=1)
-          ScreenMenu=0;
-    }
-  }
-//  ble.setMode(BLUEFRUIT_MODE_DATA);
-
-//  ble.setMode(BLUEFRUIT_MODE_COMMAND);
-//  if((!ble.isConnected()) && bleconnect=true)
+//  if(ble.isConnected())
 //  {
-//    bleconnect=false;
-//    Serial.println("BLE disconnected");
-//    if(ScreenMenu!=1)
-//      ScreenMenu=0;
+//    if(bleconnect == false && (millis() - lastBLErxtime >2000) )
+//    {
+//        //if(ScreenMenu==1)
+//            ScreenMenu=1;//MAINMENUSCREEN1;
+//            Serial.println("From bg connect ScreenMenu=1");
+//        bleconnect=true;
+//        Serial.println("BLE connected");
+//        //lastBLErxtime=millis();
+//    }
 //  }
-//  ble.setMode(BLUEFRUIT_MODE_DATA);
-
-  
-//  unsigned char DMState=DM_IDLE;
-//
-//#define  DM_IDLE          0
-//      
-//
-//  Switch(DMState)
+//  else
 //  {
-//    case 
+//    if(bleconnect == true && (millis() - lastBLErxtime >2000))
+//    {
+//        bleconnect=false;
+//        Serial.println("BLE disconnected");
+//        //if(ScreenMenu!=1)
+//          ScreenMenu=0;
+//          Serial.println("From bg disconnect ScreenMenu=0");
+//    }
 //  }
+
   
     ButtonTapPressDetect=false;
     ButtonShortPressDetect=false;
@@ -1197,18 +1048,62 @@ void showLetRideScreen(void)
 //  u8g2.drawFrame(140, 44, 218, 60);
   u8g2.setDrawColor(1);
   u8g2.setFont(u8g2_font_karla_50_tf);
-  u8g2.drawStr(140, 104-u8g2.getAscent(), "Let's ride");
+  u8g2.drawStr(140, 85-u8g2.getAscent(), "Let's ride");
   u8g2.drawBox(30,117,330,2);//draw divider line
   u8g2.setFont(u8g2_font_karla_22_tf);
-  u8g2.drawStr(140, 132, "NEURON BATTERY:");
+  u8g2.drawStr(140, 137, "NEURON BATTERY:");
   u8g2.setFont(u8g2_font_karla_50_tf);
-  sensorValue = analogRead(ADC_BATTERY);
-  voltage = sensorValue * (4.3 / 1023.0);
-  sprintf(dateBuffer, "0%.2f", voltage);
-  u8g2.drawStr(140, 202-u8g2.getAscent(), dateBuffer);  
+//  DMBatSensorVoltage = analogRead(ADC_BATTERY);
+  voltage = DMBatSensorVoltage * (4.3 / 1023.0);
+//  Serial.print("DM Battery voltage =");
+//  sprintf(dateBuffer, "0%.2f", voltage);
+//  Serial.println(dateBuffer);
+  float gBatteryVoltage=voltage;
+  uint8_t gPercentageBatteryVoltage =0;
+
+    if(gBatteryVoltage < 2.06)
+    {
+        gPercentageBatteryVoltage = (uint8_t)((aSlope[0] * gBatteryVoltage) + aLineConstant[0]);
+    }
+    else if(gBatteryVoltage < 2.11)
+    {
+        gPercentageBatteryVoltage = (uint8_t)((aSlope[1] * gBatteryVoltage) + aLineConstant[1]);
+    }
+    else if(gBatteryVoltage < 2.17)
+    {
+        gPercentageBatteryVoltage = (uint8_t)((aSlope[2] * gBatteryVoltage) + aLineConstant[2]);
+    }
+    else if(gBatteryVoltage < 2.23)
+    {
+        gPercentageBatteryVoltage = (uint8_t)((aSlope[3] * gBatteryVoltage) + aLineConstant[3]);
+    }
+    else if(gBatteryVoltage < 2.29)
+    {
+        gPercentageBatteryVoltage = (uint8_t)((aSlope[4] * gBatteryVoltage) + aLineConstant[4]);
+    }
+    else if(gBatteryVoltage < 2.34)
+    {
+        gPercentageBatteryVoltage = (uint8_t)((aSlope[5] * gBatteryVoltage) + aLineConstant[5]);
+    }
+    else if(gBatteryVoltage >= 2.34)//2.43)
+    {
+        gPercentageBatteryVoltage = (uint8_t)((aSlope[6] * gBatteryVoltage) + aLineConstant[6]);
+    }
+  
+    if(gPercentageBatteryVoltage > 100)                                                                                                                                                                                                      // if measured value is grater than 100 make it 100
+    {
+        gPercentageBatteryVoltage = 100;
+    }              
+
+
+  
+  
+  
+  sprintf(dateBuffer, "%d", gPercentageBatteryVoltage);
+  u8g2.drawStr(140, 197-u8g2.getAscent(), dateBuffer);  
   tileWidth = u8g2.getStrWidth(dateBuffer);
   u8g2.setFont(u8g2_font_karla_45_tf);
-  u8g2.drawStr(140+tileWidth, 202 - u8g2.getAscent(), "v"); 
+  u8g2.drawStr(140+tileWidth, 197 - u8g2.getAscent(), "%"); 
   u8g2.sendBuffer();
 }
 
@@ -1412,7 +1307,7 @@ void navigationScreen()
 {
   //if(newBleString!=true)
   u8g2.clearBuffer();
-
+  //u8g2.sendBuffer();
   switch(nav_icon_id)
   {
     case 1 :  //iconType.contains("head") || iconType.contains("straight") || iconType.isEmpty() || iconType.equals("") || iconType.equals(" ") || iconType == null
@@ -1484,14 +1379,16 @@ void navigationScreen()
               u8g2.setDrawColor(0);
               u8g2.setDisplayRotation(U8G2_MIRROR);//mirror the image
               //u8g2.drawXBM(400-((280+24)+71), 25, 71, 71, keepright71x71_bits); //render navigation small icons with 
-              u8g2.drawXBM(400-(15 +169), 18, 169, 194, arrowkeepright169x194px_bits); //render navigation large icons
+             // u8g2.drawXBM(400-(15 +169), 18, 169, 194, arrowkeepright169x194px_bits); //render navigation large icons
+              u8g2.drawXBM(400-(15 +169), 18, 169, 194, arrowslightright169x194px_bits); //render navigation large icons//change as per Nitant request
               u8g2.setDisplayRotation(U8G2_R0);
               u8g2.setDrawColor(1);
               break;
     case 11 :  // iconType.contains("keep-right")
               u8g2.setDrawColor(0);
               //u8g2.drawXBM(280+24, 25, 71, 71, keepright71x71_bits);
-              u8g2.drawXBM(15, 18, 169, 194, arrowkeepright169x194px_bits);
+              //u8g2.drawXBM(15, 18, 169, 194, arrowkeepright169x194px_bits);
+              u8g2.drawXBM(15, 18, 169, 194, arrowslightright169x194px_bits); //render navigation large icons//change as per Nitant request
               u8g2.setDrawColor(1);
               break;
     case 12 :  // iconType.contains("ramp-left")
@@ -1539,14 +1436,14 @@ void navigationScreen()
     case 18 :  // iconType.contains("uturn-left")
               u8g2.setDrawColor(0);
               u8g2.setDisplayRotation(U8G2_MIRROR);//mirror the image
-              u8g2.drawXBM(400-((280+24)+71), 25, 71, 71, roundaboutlastturn71x71_bits); //render navigation small icons with 
+              //u8g2.drawXBM(400-((280+24)+71), 25, 71, 71, roundaboutlastturn71x71_bits); //render navigation small icons with 
               u8g2.drawXBM(400-(15 +169), 18, 169, 194, arrowroundaboutlastturn169x194px_bits); //render navigation large icons
               u8g2.setDisplayRotation(U8G2_R0);
               u8g2.setDrawColor(1);
               break;   
     case 19 :  // iconType.contains("uturn-left")
               u8g2.setDrawColor(0);
-              u8g2.drawXBM(280+24, 25, 71, 71, roundaboutlastturn71x71_bits);
+              //u8g2.drawXBM(280+24, 25, 71, 71, roundaboutlastturn71x71_bits);
               u8g2.drawXBM(15, 18, 169, 194, arrowroundaboutlastturn169x194px_bits);  
               u8g2.setDrawColor(1);
               break;   
@@ -1556,20 +1453,69 @@ void navigationScreen()
               u8g2.drawXBM(15, 18, 169, 194, arrowmerge169x194_bits);
               u8g2.setDrawColor(1); 
               break;
-    default : Serial.println("*************** error : icons id out of range.........");
+    case 21 :  // iconType.contains("roundabout straight")
+              u8g2.setDrawColor(0);
+              //u8g2.drawXBM(280+24, 25, 71, 71, merge71x71_bits);
+              u8g2.drawXBM(15, 18, 169, 194, arrowroundaboutstraight169x194px_bits);
+              u8g2.setDrawColor(1); 
+              break;          
+    default : if(nav_icon_id != 200 || nav_icon_id != 201)
+                  Serial.println("*************** error : icons id out of range.........");
               break;                              
                             
   }
-   
-  u8g2.setDrawColor(1);  
-  u8g2.drawFrame(280,1,120,120);
-  u8g2.setFontMode(0);
-  u8g2.setFontPosTop();
-  u8g2.setFont(u8g2_font_karla_60_tf);
-  u8g2.drawStr( 200,160,(char*)CurrNavDistanceStr);
-  u8g2.setDrawColor(0);
 
+  if(nav_icon_id>0 && nav_icon_id <=21)
+  { 
+      u8g2.setDrawColor(1);  
+      //u8g2.drawFrame(280,1,120,120);
+      u8g2.setFontMode(0);
+      // u8g2.setFontPosTop();
+      
+      
+      u8g2.setFont(u8g2_font_karla_80_tf);
+      u8g2.setFontPosBottom();
+      u8g2.drawStr( 190,202,(char*)CurrNavDistanceStr);
+      u8g2_uint_t width = u8g2.getStrWidth((char*)CurrNavDistanceStr);
+      //u8g2.setFontDirection(0);
+      Serial.print("$$$$$km and m start @= ");
+      Serial.println(192+width);
+      
+      //u8g2.setFontMode(0);
+      //u8g2.setFontPosBottom();
+      u8g2.setFont(u8g2_font_karla_22B_tf);
+      u8g2.setFontPosBottom();
+      
+      if(CurrNavDistance->UnitFlag  == KILOMETER)
+      {
+          u8g2.drawStr( 192+width,202,"km");
+      }
+      else if(CurrNavDistance->UnitFlag  == METER)
+      {
+        u8g2.drawStr( 192+width,202,"m");
+      }
+          
+      u8g2.setDrawColor(0);
+      u8g2.setFontPosTop();
+      Serial.println(" Drawn distance on screen buffer ");
+      
+  }
+  else
+  {
+    if(nav_icon_id == 200)
+    {
+          Serial.println(" ####### NAVIGATION START>>>>>> ");
+          ScreenMenu = MAINMENUSCREENNAVIGATE;
+    }
+    else if(nav_icon_id ==201)
+    {
+          Serial.println(" ####### NAVIGATION STOP <<<<<< ");
+          ScreenMenu = 1;
+    }
+  }
+  u8g2.setDrawColor(0);
   u8g2.drawXBM(160, 240-20, 89, 8, fiveoutoffivedots89x7_75_bits);    
+  u8g2.setDrawColor(1);
   u8g2.sendBuffer(); 
 
 }
@@ -1825,24 +1771,25 @@ Serial.print("Send Data:");
  * *******************************************************************************************************************/
 
 
-bool cp_ind_callback_ind(struct kbike_communication_protocol *session) {
+bool cp_ind_callback_ind(struct kbike_communication_protocol *session) 
+{
 
 
  // osStatus status;
     bool res = FALSE;
-
+  Serial.println("Entry->cp_ind_callback_ind");
   communication_protocol_header *hdr = (communication_protocol_header*) session->in.buf;
 
   //KLOG("Entry->cp_ind_callback_ind");
-  Serial.println("Entry->cp_ind_callback_ind");
+  
 
-#ifdef __linux__
+//#ifdef __linux__
     void *data_payload = (void*) malloc(hdr->size_payload);
-#elif __APPLE__
-    void *data_payload = (void*) malloc(hdr->size_payload);
-#else
-    void *data_payload = pvPortMalloc(hdr->size_payload);
-#endif
+//#elif __APPLE__
+//    void *data_payload = (void*) malloc(hdr->size_payload);
+//#else
+//    void *data_payload = pvPortMalloc(hdr->size_payload);
+//#endif
 
     if (data_payload == NULL)
     {
@@ -1871,7 +1818,7 @@ bool cp_ind_callback_ind(struct kbike_communication_protocol *session) {
                                 rtc.setMonth(timedat->MM);
                                 rtc.setYear(timedat->YY);
                                 Serial.println("Date Time updated");
-                                ScreenMenu=MAINMENUSCREEN1;
+                               // ScreenMenu=MAINMENUSCREEN1;
                                 break;
           case COMMUNICATION_PROTOCOL_CMD_VEHICLE_BATTERY_VOLTAGE :
                                 VehBatteryVoltage=(struct vehicle_battery_voltage*)data_payload;
@@ -1901,38 +1848,60 @@ bool cp_ind_callback_ind(struct kbike_communication_protocol *session) {
                                 break;
           case COMMUNICATION_PROTOCOL_CMD_CURRENT_MANUEVER_ICON :
                                 CurrNavIconId =(struct current_maneuver_icon *)data_payload;
+                                ScreenMenu=MAINMENUSCREENNAVIGATE;
+                                Serial.println("From Meneuver :ScreenMenu=NAV");
                                 nav_icon_id=CurrNavIconId->IconID;
-                                Serial.print("Navigation Icons ID recieved : "); 
-                                Serial.println(nav_icon_id); 
+                                Serial.print("Icons ID recieved : "); 
+                                Serial.println(nav_icon_id);
+                                lasticonsreceived=millis(); 
+                                Serial.println("Read Rx millis");
+                                if(nav_icon_id == 201 )  
+                                {
+                                    ScreenMenu = 1;
+                                    Serial.println("From Maneuver : ScreenMenu=1");
+                                    
+                                }
+                                else if(nav_icon_id == 200)
+                                {
+                                    ScreenMenu=MAINMENUSCREENNAVIGATE;
+                                    CurrNavDistance->UnitFlag=METER;
+                                    CurrNavDistance->distance=0;
+                                    CurrNavIconId=0;
+                                    Serial.println("From maneuver :ScreenMenu=NAV "); 
+                                    
+                                }
+                                
+                                Serial.println("exiting protocol receive callback");     
                                 break;                  
           case COMMUNICATION_PROTOCOL_CMD_CURRENT_MANUEVER_DISTANCE_UNIT :
                                 CurrNavDistance = (struct current_maneuver_distance_unit *)data_payload;
-                                Serial.println("Turn distance recieved"); 
-                                if(ScreenMenu == MAINMENUSCREENNAVIGATE) //navigation screen or menu
-                                {   Serial.print("In Navigation Mode:");
-                                    if(CurrNavDistance->UnitFlag  == KILOMETER)    
-                                            sprintf(CurrNavDistanceStr, "%d km" , CurrNavDistance->distance);
-                                    else if(CurrNavDistance->UnitFlag  == METER)
-                                            sprintf(CurrNavDistanceStr, "%d m" , CurrNavDistance->distance);
-                                    if(CurrNavDistance->distance == 0)
-                                    {
-                                         sprintf(CurrNavDistanceStr, "Now !!");
-                                    }
-                                            
-                                    Serial.println(CurrNavDistanceStr);        
-//                                    u8g2.setDrawColor(0);  
-//                                    u8g2.drawBox(200,160,200,60);
-//                                    u8g2.setDrawColor(1); 
-//                                    u8g2.setFontMode(0);
-//                                    u8g2.setFontPosTop();
-//                                    u8g2.setFont(u8g2_font_karla_45_tf);
-//                                    u8g2.drawStr( 200,160,(char*)CurrNavDistanceStr);
-//                                    u8g2.setDrawColor(0);
-//                                  
-//                                    //u8g2.drawXBM(160, 240-20, 89, 9, i5dots89x9_bits);    
-//                                    u8g2.sendBuffer();
-                                    newBleString=true; //set a flag for navigation engine to receive 
-                                }
+                                ScreenMenu=MAINMENUSCREENNAVIGATE;
+                                Serial.println("From Meneuver distance :ScreenMenu=NAV");
+                                lasticonsreceived=millis();
+                                Serial.print("Turn distance recieved :");
+                                Serial.println(CurrNavDistance->distance);
+                                for(int i=0;i<10;i++)
+                                    CurrNavDistanceStr[i]=0;
+
+                                    
+                                
+
+                                if(CurrNavDistance->UnitFlag  == KILOMETER) 
+                                {
+                                    //Serial.println("Receive km Unit");   
+                                    sprintf(CurrNavDistanceStr, "%.1f" , (float)CurrNavDistance->distance/10.0);
+                                    //Serial.println(CurrNavDistanceStr);
+                                }    
+                                else if(CurrNavDistance->UnitFlag  == METER)
+                                {
+                                    //Serial.println("Receive m Unit");
+                                    sprintf(CurrNavDistanceStr, "%u" , CurrNavDistance->distance);  
+                                }      
+                                else
+                                      Serial.println("ERROR : No unit receive from phone");      
+                                      
+                                newBleString=true; //set a flag for navigation engine to receive 
+                                
                                 break;
           case COMMUNICATION_PROTOCOL_CMD_NEXT_MANUEVER_ICON :
                                 Serial.println("NEXT_MANUEVER_ICON recieved");
@@ -1966,13 +1935,13 @@ bool cp_ind_callback_ind(struct kbike_communication_protocol *session) {
 
   }
 
-#ifdef __linux__
+//#ifdef __linux__
       free(data_payload);
-#elif __APPLE__
-      free(data_payload);
-#else
-      vPortFree(data_payload);
-#endif
+//#elif __APPLE__
+//      free(data_payload);
+//#else
+//      vPortFree(data_payload);
+//#endif
 
 
  // KLOGI(INFO,"Exit->cp_ind_callback_ind");
